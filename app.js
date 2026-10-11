@@ -2,7 +2,8 @@
 // телефона. Ответы: «Не помню» — карточка вернётся в этой же сессии; «Помню» — интервал
 // растёт в 2,5 раза (первый — 1 день); «Легко» — в 4 раза (первый — 3 дня).
 // «Сказать» по выражению становится доступна, когда его «Понять» уже выучено (интервал ≥ 1 дня).
-// Новых в день — 10, 20 или 30, выбирается на главной.
+// Новых в день — 10, 20 или 30, выбирается на главной. Когда норма пройдена: «Ещё 10 новых»
+// добавляет разово на сегодня, «Потренироваться» гоняет знакомые карточки, не трогая расписание.
 (() => {
   const KEY = 'levelup-cards-v1';
   const LIMITS = [10, 20, 30];
@@ -24,8 +25,8 @@
   const startOfDay = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
 
   function newLeft() {
-    if (state.newDay !== today()) { state.newDay = today(); state.newCount = 0; }
-    return Math.max(0, (state.limit || 10) - state.newCount);
+    if (state.newDay !== today()) { state.newDay = today(); state.newCount = 0; state.bonus = 0; }
+    return Math.max(0, (state.limit || 10) + (state.bonus || 0) - state.newCount);
   }
   const due = () => cards.filter((c) => state.cards[c.id] && state.cards[c.id].due <= Date.now());
   const twin = (c) => c.id.replace(/:say$/, ':understand');
@@ -76,7 +77,11 @@
         ${LIMITS.map((n) => `<button class="seg${(state.limit || 10) === n ? ' on' : ''}" data-limit="${n}" aria-pressed="${(state.limit || 10) === n}">${n}</button>`).join('')}
       </div>
       <button class="primary" id="start" ${nothing ? 'disabled' : ''}>${nothing ? 'На сегодня всё' : 'Начать'}</button>
-      ${nothing ? `<p class="note">${next ? `Следующее повторение — ${when(next)}.` : 'Все карточки пройдены.'}</p>` : ''}
+      ${nothing ? `<p class="note">${next ? `Следующее повторение — ${when(next)}.` : 'Все карточки пройдены.'} Хотите ещё — выбирайте:</p>
+        <div class="more">
+          ${fresh().length ? '<button class="secondary" id="bonus"><b>Ещё 10 новых</b><span>разово, на сегодня</span></button>' : ''}
+          ${seen ? '<button class="secondary" id="practice"><b>Потренироваться</b><span>знакомые, без влияния на график</span></button>' : ''}
+        </div>` : ''}
       <div class="spacer"></div>
       <p class="note">Каждое выражение — две карточки: сначала «Понять», а когда оно выучено — «Сказать». Отвечайте вслух — в этом весь смысл. Прогресс хранится на этом телефоне.</p>
       ${confirmReset ? `
@@ -87,6 +92,10 @@
     app.querySelectorAll('[data-limit]').forEach((b) => { b.onclick = () => { state.limit = +b.dataset.limit; save(); home(); }; });
     const start = document.getElementById('start');
     if (!nothing) start.onclick = begin;
+    const bonus = document.getElementById('bonus');
+    if (bonus) bonus.onclick = () => { newLeft(); state.bonus = (state.bonus || 0) + 10; save(); begin(); };
+    const pr = document.getElementById('practice');
+    if (pr) pr.onclick = practice;
     const r = document.getElementById('reset');
     if (r) r.onclick = () => { confirmReset = true; home(); };
     const y = document.getElementById('yes');
@@ -99,6 +108,15 @@
   function begin() {
     const queue = [...due(), ...fresh().slice(0, newLeft())];
     session = { queue, done: 0, total: queue.length, again: 0, shown: false };
+    show();
+  }
+
+  // Тренировка: до 20 знакомых карточек вперемешку; ответы не меняют расписание.
+  function practice() {
+    const pool = cards.filter((c) => state.cards[c.id]);
+    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+    const queue = pool.slice(0, 20);
+    session = { queue, done: 0, total: queue.length, again: 0, shown: false, practice: true };
     show();
   }
 
@@ -143,13 +161,17 @@
         <div class="count">${session.done}/${session.total}</div>
       </div>
       <article class="card ${c.level}">
-        <div class="chips"><span class="chip">${c.level}</span><span class="chip side">${understand ? 'ПОНЯТЬ' : 'СКАЗАТЬ'}</span></div>
+        <div class="chips"><span class="chip">${c.level}</span><span class="chip side">${understand ? 'ПОНЯТЬ' : 'СКАЗАТЬ'}</span>${session.practice ? '<span class="chip side">ТРЕНИРОВКА</span>' : ''}</div>
         <div class="topic">${esc(c.topic || '')}</div>
         ${front}
         ${session.shown ? back : ''}
       </article>
       <div class="spacer"></div>
-      ${session.shown ? `
+      ${session.shown && session.practice ? `
+        <div class="grades two">
+          <button class="grade g-again" data-p="again"><b>Не помню</b><span>ещё раз в конце</span></button>
+          <button class="grade g-good" data-p="ok"><b>Помню</b><span>дальше</span></button>
+        </div>` : session.shown ? `
         <div class="grades">
           <button class="grade g-again" data-g="again"><b>Не помню</b><span>сейчас ещё раз</span></button>
           <button class="grade g-good" data-g="good"><b>Помню</b><span>через ${days(nextIvl(c, 'good'))}</span></button>
@@ -160,7 +182,15 @@
     const say = document.getElementById('say') || document.getElementById('say2');
     if (say) say.onclick = () => speak(plain(c.en));
     if (!session.shown) document.getElementById('reveal').onclick = () => { session.shown = true; show(); if (!understand) speak(plain(c.en)); };
+    else if (session.practice) app.querySelectorAll('[data-p]').forEach((b) => { b.onclick = () => drill(c, b.dataset.p); });
     else app.querySelectorAll('.grade').forEach((b) => { b.onclick = () => grade(c, b.dataset.g); });
+  }
+
+  function drill(c, p) {
+    session.queue.shift();
+    session.shown = false;
+    if (p === 'again') { session.queue.push(c); session.again += 1; } else session.done += 1;
+    show();
   }
 
   function grade(c, g) {
@@ -184,8 +214,8 @@
   function finish() {
     app.innerHTML = `
       <div class="done">
-        <div class="eyebrow">СЕССИЯ ЗАВЕРШЕНА</div>
-        <div class="big">+${session.total}</div>
+        <div class="eyebrow">${session.practice ? 'ТРЕНИРОВКА ЗАВЕРШЕНА' : 'СЕССИЯ ЗАВЕРШЕНА'}</div>
+        <div class="big">${session.practice ? '' : '+'}${session.total}</div>
         <p>Карточек пройдено: ${session.total}. ${session.again ? `Повторов внутри сессии: ${session.again}.` : 'Без единой ошибки.'}</p>
       </div>
       <div class="spacer"></div>
