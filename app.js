@@ -1,9 +1,11 @@
 // Level Up: карточки. Простое интервальное повторение без сервера: прогресс — в localStorage
 // телефона. Ответы: «Не помню» — карточка вернётся в этой же сессии; «Помню» — интервал
 // растёт в 2,5 раза (первый — 1 день); «Легко» — в 4 раза (первый — 3 дня).
+// «Сказать» по выражению становится доступна, когда его «Понять» уже выучено (интервал ≥ 1 дня).
+// Новых в день — 10, 20 или 30, выбирается на главной.
 (() => {
   const KEY = 'levelup-cards-v1';
-  const NEW_PER_DAY = 10;
+  const LIMITS = [10, 20, 30];
   const DAY = 86400000;
   const app = document.getElementById('app');
 
@@ -14,8 +16,8 @@
 
   // ——— хранение ———
   function load() {
-    try { return JSON.parse(localStorage.getItem(KEY)) || { cards: {}, newDay: '', newCount: 0 }; }
-    catch { return { cards: {}, newDay: '', newCount: 0 }; }
+    try { return JSON.parse(localStorage.getItem(KEY)) || { cards: {}, newDay: '', newCount: 0, limit: 10 }; }
+    catch { return { cards: {}, newDay: '', newCount: 0, limit: 10 }; }
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* без памяти — работаем в пределах сессии */ } }
   const today = () => new Date().toLocaleDateString('sv');
@@ -23,10 +25,14 @@
 
   function newLeft() {
     if (state.newDay !== today()) { state.newDay = today(); state.newCount = 0; }
-    return Math.max(0, NEW_PER_DAY - state.newCount);
+    return Math.max(0, (state.limit || 10) - state.newCount);
   }
   const due = () => cards.filter((c) => state.cards[c.id] && state.cards[c.id].due <= Date.now());
-  const fresh = () => cards.filter((c) => !state.cards[c.id]);
+  const twin = (c) => c.id.replace(/:say$/, ':understand');
+  const fresh = () => {
+    const ready = cards.filter((c) => c.side === 'say' && !state.cards[c.id] && state.cards[twin(c)] && state.cards[twin(c)].ivl >= 1);
+    return [...ready, ...cards.filter((c) => c.side === 'understand' && !state.cards[c.id])];
+  };
   const learned = () => cards.filter((c) => state.cards[c.id] && state.cards[c.id].ivl >= 1).length;
 
   // ——— разметка ———
@@ -55,7 +61,7 @@
       <header>
         <div class="eyebrow">LEVEL UP · АНГЛИЙСКИЙ</div>
         <h1 class="title">Карточки</h1>
-        <div class="deck">B1–B2, набор 1 · ${total / 2} выражений, ${total} карточек</div>
+        <div class="deck">B1–B2 · ${total / 2} выражений, ${total} карточек</div>
       </header>
       <section class="stats" aria-label="Сегодня">
         <div class="stat" style="--c: var(--coral)"><b>${d}</b><span>повторить</span></div>
@@ -66,22 +72,26 @@
         <div class="xp" aria-hidden="true"><i style="width:${pct(l)}%; background: var(--mint)"></i><i style="width:${pct(seen - l)}%; background: var(--sun)"></i></div>
         <div class="xp-label"><span>Полоса опыта</span><span>${l} из ${total}</span></div>
       </section>
+      <div class="limit" role="group" aria-label="Новых в день"><span>Новых в день</span>
+        ${LIMITS.map((n) => `<button class="seg${(state.limit || 10) === n ? ' on' : ''}" data-limit="${n}" aria-pressed="${(state.limit || 10) === n}">${n}</button>`).join('')}
+      </div>
       <button class="primary" id="start" ${nothing ? 'disabled' : ''}>${nothing ? 'На сегодня всё' : 'Начать'}</button>
       ${nothing ? `<p class="note">${next ? `Следующее повторение — ${when(next)}.` : 'Все карточки пройдены.'}</p>` : ''}
       <div class="spacer"></div>
-      <p class="note">Сначала идут карточки «Понять», потом «Сказать». Отвечайте вслух — в этом весь смысл. Прогресс хранится на этом телефоне.</p>
+      <p class="note">Каждое выражение — две карточки: сначала «Понять», а когда оно выучено — «Сказать». Отвечайте вслух — в этом весь смысл. Прогресс хранится на этом телефоне.</p>
       ${confirmReset ? `
         <div class="confirm"><span>Сбросить весь прогресс? Это не отменить.</span>
           <div class="row"><button id="no">Оставить</button><button class="danger" id="yes">Сбросить</button></div></div>`
         : '<button class="link" id="reset">Сбросить прогресс</button>'}
     `;
+    app.querySelectorAll('[data-limit]').forEach((b) => { b.onclick = () => { state.limit = +b.dataset.limit; save(); home(); }; });
     const start = document.getElementById('start');
     if (!nothing) start.onclick = begin;
     const r = document.getElementById('reset');
     if (r) r.onclick = () => { confirmReset = true; home(); };
     const y = document.getElementById('yes');
     if (y) {
-      y.onclick = () => { state = { cards: {}, newDay: '', newCount: 0 }; save(); confirmReset = false; home(); };
+      y.onclick = () => { state = { cards: {}, newDay: '', newCount: 0, limit: state.limit || 10 }; save(); confirmReset = false; home(); };
       document.getElementById('no').onclick = () => { confirmReset = false; home(); };
     }
   }
@@ -134,6 +144,7 @@
       </div>
       <article class="card ${c.level}">
         <div class="chips"><span class="chip">${c.level}</span><span class="chip side">${understand ? 'ПОНЯТЬ' : 'СКАЗАТЬ'}</span></div>
+        <div class="topic">${esc(c.topic || '')}</div>
         ${front}
         ${session.shown ? back : ''}
       </article>

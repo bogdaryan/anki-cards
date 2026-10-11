@@ -44,6 +44,11 @@ button:focus-visible { outline: 3px solid var(--sun); outline-offset: 2px; }
 .xp { display: flex; height: 10px; border-radius: 99px; overflow: hidden; background: var(--line); }
 .xp i { display: block; height: 100%; }
 .xp-label { font-size: 13px; color: var(--muted); margin-top: 6px; display: flex; justify-content: space-between; }
+.limit { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--muted); }
+.limit span { flex: 1; }
+.seg { min-width: 52px; padding: 9px 0; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); font-variant-numeric: tabular-nums; }
+.seg.on { background: var(--violet); color: var(--on-accent); border-color: var(--violet); }
+.topic { color: var(--muted); font-size: 14px; margin-top: -6px; }
 .primary {
   border: 0; border-radius: 16px; padding: 18px; background: var(--violet); color: var(--on-accent);
   font-family: var(--display); font-size: 16px; letter-spacing: .04em;

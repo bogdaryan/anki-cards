@@ -1,6 +1,6 @@
 // Кэш приложения: всё нужное лежит на телефоне, интернет нужен только для обновлений.
 // Меняя любой файл приложения, поднимайте VERSION — иначе телефон останется на старом.
-const VERSION = 'v3';
+const VERSION = 'v4';
 const FILES = [
   './', './index.html', './style.css', './app.js', './cards.json', './manifest.webmanifest',
   './fonts/Unbounded-Bold.ttf', './fonts/Manrope-Regular.ttf', './fonts/Manrope-Bold.ttf',
