@@ -10,20 +10,23 @@
 // Доступ по коду: карточки лежат зашифрованными (cards.enc, AES-256-GCM, ключ — PBKDF2 из кода).
 // Самого кода в приложении нет: верный код просто расшифровывает данные. Ключ, полученный из
 // верного кода, запоминается на устройстве; «Заблокировать» в профилях его стирает.
-// Профили: у каждого свой прогресс (свой ключ в localStorage). Прогресс живёт только на этом
+// Аккаунты: у каждого свой прогресс (свой ключ в localStorage). Прогресс живёт только на этом
 // устройстве: на другом телефоне — свой, никуда не уходит.
+// Режимы: «Фразы» (выражения в предложениях) и «Слова» (отдельные слова, 5000 B1–B2 + 5000 C1–C2).
+// У каждого режима свой счётчик новых за день; прогресс карточек общий файл, но id разные (w:…).
 (() => {
   const OLD_KEY = 'levelup-cards-v1';
   const PROFILES_KEY = 'levelup-profiles';
   const LIMITS = [10, 20, 30, 0]; // 0 — без лимита
   const PORTION = 20;
-  const LEVELS = { b: ['B1', 'B2'], c: ['C1', 'C2'] };
+  const LEVELS = { b: ['A2', 'B1', 'B2'], c: ['C1', 'C2'] }; // A2 — база, которую надо закрыть по пути к B2
   const DAY = 86400000;
   const TOPIC_COLORS = ['--violet', '--coral', '--mint', '--sun', '--sky', '--pink'];
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const app = document.getElementById('app');
 
   let all = [];
+  let allWords = [];
   let cards = [];
   const topicIndex = {};
   let profiles = { list: [], current: null };
@@ -41,7 +44,7 @@
   }, { passive: false });
 
   // ——— хранение ———
-  function blank() { return { cards: {}, newDay: '', newCount: 0, limit: 10, bonus: 0, days: [], doneDay: '', doneCount: 0, levels: { b: true, c: false } }; }
+  function blank() { return { cards: {}, newDay: '', newCount: 0, newCountW: 0, limit: 10, bonus: 0, bonusW: 0, days: [], doneDay: '', doneCount: 0, levels: { b: true, c: false }, mode: 'phrases' }; }
   // ——— профили ———
   function loadProfiles() {
     let p = null;
@@ -51,7 +54,7 @@
     let old = null;
     try { old = localStorage.getItem(OLD_KEY); } catch { /* нет памяти */ }
     if (old) {
-      p = { list: [{ id: 'p1', name: 'Профиль 1' }], current: 'p1' };
+      p = { list: [{ id: 'p1', name: 'Мой аккаунт', admin: true, created: Date.now() }], current: 'p1' };
       try { localStorage.setItem(`${OLD_KEY}:p1`, old); localStorage.setItem(PROFILES_KEY, JSON.stringify(p)); } catch { /* нет памяти */ }
       return p;
     }
@@ -65,43 +68,64 @@
     try { return Object.assign(blank(), JSON.parse(localStorage.getItem(stateKey())) || {}); } catch { return blank(); }
   }
   function save() { if (!profiles.current) return; try { localStorage.setItem(stateKey(), JSON.stringify(state)); } catch { /* без памяти — работаем в пределах сессии */ } }
-  function addProfile(name) {
-    const id = `p${Date.now().toString(36)}`;
-    profiles.list.push({ id, name: name.trim().slice(0, 24) || `Профиль ${profiles.list.length + 1}` });
-    profiles.current = id;
-    saveProfiles();
-    state = load();
-    applyLevels();
+  function touch() { const a = curAcc(); if (a) { a.last = Date.now(); saveProfiles(); } }
+  // ——— аккаунты: ник + пароль. Пароль не хранится: только соль и PBKDF2-хеш ———
+  const PASS_ITER = 150000;
+  const enc8 = (t) => new TextEncoder().encode(t);
+  async function hashPass(pass, saltB64) {
+    const salt = saltB64 ? Uint8Array.from(atob(saltB64), (c) => c.charCodeAt(0)) : crypto.getRandomValues(new Uint8Array(16));
+    const base = await crypto.subtle.importKey('raw', enc8(pass), 'PBKDF2', false, ['deriveBits']);
+    const bits = new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: PASS_ITER, hash: 'SHA-256' }, base, 256));
+    return { salt: btoa(String.fromCharCode(...salt)), hash: btoa(String.fromCharCode(...bits)) };
   }
-  function switchProfile(id) { profiles.current = id; saveProfiles(); state = load(); applyLevels(); }
-  function removeProfile(id) {
+  function sameHash(a, b) { // сравнение без раннего выхода
+    if (a.length !== b.length) return false;
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    return d === 0;
+  }
+  const findAcc = (nick) => profiles.list.find((x) => x.name.toLowerCase() === nick.trim().toLowerCase());
+  const curAcc = () => profiles.list.find((x) => x.id === profiles.current);
+  const isAdmin = () => !!(curAcc() || {}).admin;
+  function enter(id) {
+    profiles.current = id;
+    const a = curAcc(); if (a) a.last = Date.now();
+    saveProfiles(); state = load(); applyLevels();
+  }
+  async function createAccount(nick, pass) {
+    const { salt, hash } = await hashPass(pass);
+    const id = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    profiles.list.push({ id, name: nick.trim(), salt, hash, admin: profiles.list.length === 0, created: Date.now(), last: Date.now() });
+    enter(id);
+  }
+  function removeAccount(id) {
     try { localStorage.removeItem(`${OLD_KEY}:${id}`); } catch { /* нет памяти */ }
     profiles.list = profiles.list.filter((x) => x.id !== id);
-    if (profiles.current === id) profiles.current = profiles.list.length ? profiles.list[0].id : null;
     saveProfiles();
-    state = load();
-    applyLevels();
   }
+  function logout() { profiles.current = null; saveProfiles(); state = blank(); }
 
   // ——— уровни ———
   const levelsOn = () => Object.assign({ b: true, c: false }, state.levels || {});
+  const isWords = () => state.mode === 'words' && allWords.length > 0;
+  const W = () => (isWords() ? 'W' : ''); // суффикс счётчиков режима «Слова»
   function applyLevels() {
     const on = levelsOn();
     const allowed = [...(on.b ? LEVELS.b : []), ...(on.c ? LEVELS.c : [])];
-    cards = all.filter((c) => allowed.includes(c.level));
+    cards = (isWords() ? allWords : all).filter((c) => allowed.includes(c.level));
   }
   const today = () => new Date().toLocaleDateString('sv');
   const startOfDay = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
 
   function rollDay() {
-    if (state.newDay !== today()) { state.newDay = today(); state.newCount = 0; state.bonus = 0; }
+    if (state.newDay !== today()) { state.newDay = today(); state.newCount = 0; state.newCountW = 0; state.bonus = 0; state.bonusW = 0; }
     if (state.doneDay !== today()) { state.doneDay = today(); state.doneCount = 0; }
   }
   const unlimited = () => state.limit === 0;
   function newLeft() {
     rollDay();
     if (unlimited()) return Infinity;
-    return Math.max(0, (state.limit || 10) + (state.bonus || 0) - state.newCount);
+    return Math.max(0, (state.limit || 10) + (state[`bonus${W()}`] || 0) - (state[`newCount${W()}`] || 0));
   }
   function streak() {
     const set = new Set(state.days || []);
@@ -171,7 +195,7 @@
     const on = levelsOn();
     const total = cards.length;
     const l = learned();
-    const seen = Object.keys(state.cards).length;
+    const seen = cards.filter((c) => state.cards[c.id]).length;
     const pct = (x) => (total ? (x / total) * 100 : 0);
     const nothing = d + n === 0;
     const next = Object.values(state.cards).map((s) => s.due).filter((t) => t > Date.now()).sort((a, b) => a - b)[0];
@@ -182,15 +206,19 @@
       <header class="head">
         <div class="head-text">
           <div class="eyebrow">LEVEL UP · АНГЛИЙСКИЙ</div>
-          <h1 class="title">Карточки</h1>
-          <div class="deck">${[on.b ? 'B1–B2' : '', on.c ? 'C1–C2' : ''].filter(Boolean).join(' + ')} · ${fmt(total / 2)} ${plural(total / 2, 'выражение', 'выражения', 'выражений')}, ${fmt(total)} ${plural(total, 'карточка', 'карточки', 'карточек')}</div>
+          <h1 class="title">${isWords() ? 'Слова' : 'Фразы'}</h1>
+          <div class="deck">${[on.b ? 'B1–B2' : '', on.c ? 'C1–C2' : ''].filter(Boolean).join(' + ')} · ${fmt(total / 2)} ${isWords() ? plural(total / 2, 'слово', 'слова', 'слов') : plural(total / 2, 'выражение', 'выражения', 'выражений')}, ${fmt(total)} ${plural(total, 'карточка', 'карточки', 'карточек')}</div>
         </div>
         ${ring(state.doneCount, state.doneCount + d + n)}
       </header>
+      <div class="modes" role="tablist" aria-label="Режим">
+        <button class="mode${isWords() ? '' : ' on'}" data-mode="phrases" role="tab" aria-selected="${!isWords()}"><b>Фразы</b><span>выражения в предложениях</span></button>
+        <button class="mode${isWords() ? ' on' : ''}" data-mode="words" role="tab" aria-selected="${isWords()}"><b>Слова</b><span>отдельные слова</span></button>
+      </div>
       <div class="chips-row">
         <span class="pill${s ? ' hot' : ''}">${flame}<span>серия</span><b>${days(s)}</b></span>
         <span class="pill"><span>знакомых</span><b>${fmt(seen)}</b></span>
-        <button class="pill who" id="who" aria-label="Профиль: ${esc(profileName())}">${person}<b>${esc(profileName())}</b></button>
+        <button class="pill who" id="who" aria-label="Аккаунт: ${esc(profileName())}">${person}<b>${esc(profileName())}</b></button>
       </div>
       <section class="stats" aria-label="Сегодня">
         <div class="stat" style="--c: var(--coral)"><b>${d}</b><span>повторить</span></div>
@@ -217,7 +245,7 @@
           ${seen ? '<button class="secondary" id="practice"><b>Потренироваться</b><span>знакомые, график не меняется</span></button>' : ''}
         </div>` : ''}
       <div class="spacer"></div>
-      <p class="note">Каждое выражение — две карточки: сначала «Понять», а когда оно выучено — «Сказать». Отвечайте вслух. Прогресс хранится на этом телефоне.</p>
+      <p class="note">${isWords() ? 'Каждое слово' : 'Каждое выражение'} — две карточки: сначала «Понять», а когда ${isWords() ? 'оно выучено' : 'оно выучено'} — «Сказать». Отвечайте вслух. Прогресс хранится на этом телефоне, в вашем аккаунте.</p>
       ${confirmReset ? `
         <div class="confirm"><span>Сбросить весь прогресс? Это не отменить.</span>
           <div class="row"><button id="no">Оставить</button><button class="danger" id="yes">Сбросить</button></div></div>`
@@ -227,6 +255,7 @@
       const f = app.querySelector('.ring .fill');
       if (f) f.style.strokeDashoffset = f.dataset.to;
     }));
+    app.querySelectorAll('[data-mode]').forEach((b) => { b.onclick = () => { state.mode = b.dataset.mode; save(); applyLevels(); home(); }; });
     app.querySelectorAll('[data-limit]').forEach((b) => { b.onclick = () => { state.limit = +b.dataset.limit; save(); home(); }; });
     app.querySelectorAll('[data-level]').forEach((b) => {
       b.onclick = () => {
@@ -236,74 +265,168 @@
         state.levels = lv; save(); applyLevels(); home();
       };
     });
-    document.getElementById('who').onclick = people;
+    document.getElementById('who').onclick = () => accountScreen();
     if (!nothing) document.getElementById('start').onclick = begin;
     const bonus = document.getElementById('bonus');
-    if (bonus) bonus.onclick = () => { newLeft(); state.bonus = (state.bonus || 0) + 10; save(); begin(); };
+    if (bonus) bonus.onclick = () => { newLeft(); state[`bonus${W()}`] = (state[`bonus${W()}`] || 0) + 10; save(); begin(); };
     const pr = document.getElementById('practice');
     if (pr) pr.onclick = practice;
     const r = document.getElementById('reset');
     if (r) r.onclick = () => { confirmReset = true; home(); };
     const y = document.getElementById('yes');
     if (y) {
-      y.onclick = () => { state = Object.assign(blank(), { limit: state.limit ?? 10, levels: levelsOn() }); save(); confirmReset = false; home(); };
+      y.onclick = () => { state = Object.assign(blank(), { limit: state.limit ?? 10, levels: levelsOn(), mode: state.mode }); save(); confirmReset = false; home(); };
       document.getElementById('no').onclick = () => { confirmReset = false; home(); };
     }
   }
 
-  // ——— профили: первый запуск и переключение ———
-  function welcome() {
+  // ——— экраны входа ———
+  let locked = null; // зашифрованные данные ждут код приглашения (новый телефон или «Заблокировать»)
+  const waitLeft = () => { try { return Math.ceil(((+localStorage.getItem('levelup-wait') || 0) - Date.now()) / 1000); } catch { return 0; } };
+  function failed() {
+    try {
+      const n = (+localStorage.getItem('levelup-fails') || 0) + 1;
+      localStorage.setItem('levelup-fails', n);
+      if (n >= 5) { localStorage.setItem('levelup-wait', Date.now() + 30000); localStorage.setItem('levelup-fails', 0); }
+    } catch { /* нет памяти */ }
+  }
+  function okTry() { try { localStorage.removeItem('levelup-fails'); } catch { /* нет памяти */ } }
+
+  async function unlock(code) {
+    const key = await deriveKey(code, new Uint8Array(locked.buf).slice(3, 19));
+    const [data, words] = await openAll(locked.buf, locked.wbuf, key);
+    try { localStorage.setItem(KEY_STORE, b64(new Uint8Array(await crypto.subtle.exportKey('raw', key)))); } catch { /* нет памяти */ }
+    locked = null;
+    start(data, words, true);
+  }
+
+  // tab: 'login' | 'reg' | 'claim' (старый аккаунт без пароля — задать ник и пароль)
+  function authScreen(tab, msg) {
+    const invite = !!locked;
+    const claim = tab === 'claim';
     app.className = 'screen';
     app.innerHTML = `
-      <div class="head"><div class="head-text">
+      <div class="pin-head">
+        <img class="pin-icon" src="icons/icon-192.png" alt="">
         <div class="eyebrow">LEVEL UP · АНГЛИЙСКИЙ</div>
-        <h1 class="title">Карточки</h1>
-        <div class="deck">${fmtN(all.length / 2)} ${plural(all.length / 2, 'выражение', 'выражения', 'выражений')}: B1–B2 и C1–C2</div></div></div>
-      <form class="profile-form" id="pf">
-        <label for="pname">Как вас зовут?</label>
-        <input id="pname" name="pname" maxlength="24" autocomplete="nickname" placeholder="Имя или ник" enterkeyhint="go">
-        <button class="primary" type="submit">Начать</button>
+        <h1 class="title">${claim ? 'Защитите аккаунт' : tab === 'reg' ? 'Регистрация' : 'Вход'}</h1>
+      </div>
+      ${claim ? '<p class="note center">Придумайте ник и пароль — прогресс останется ваш, и без пароля его никто не откроет.</p>' : `
+      <div class="modes" role="tablist">
+        <button class="mode${tab === 'login' ? ' on' : ''}" data-tab="login" role="tab" aria-selected="${tab === 'login'}"><b>Вход</b><span>уже есть аккаунт</span></button>
+        <button class="mode${tab === 'reg' ? ' on' : ''}" data-tab="reg" role="tab" aria-selected="${tab === 'reg'}"><b>Регистрация</b><span>новый аккаунт</span></button>
+      </div>`}
+      <form class="profile-form" id="af" autocomplete="on">
+        <label for="nick">Ник</label>
+        <input id="nick" name="username" maxlength="24" autocomplete="username" autocapitalize="off" spellcheck="false" value="${claim ? esc((curAcc() || {}).name || '') : ''}" required>
+        <label for="pass">Пароль</label>
+        <input id="pass" name="password" type="password" minlength="4" maxlength="64" autocomplete="${tab === 'login' ? 'current-password' : 'new-password'}" required>
+        ${tab !== 'login' ? `<label for="pass2">Пароль ещё раз</label>
+        <input id="pass2" name="password2" type="password" minlength="4" maxlength="64" autocomplete="new-password" required>` : ''}
+        ${invite ? `<label for="inv">Код приглашения</label>
+        <input id="inv" name="invite" inputmode="numeric" maxlength="12" autocomplete="one-time-code" required>` : ''}
+        <p class="note pin-msg" role="status">${esc(msg || (invite ? 'Код приглашения нужен один раз на этом телефоне.' : ''))}</p>
+        <button class="primary" type="submit">${claim ? 'Сохранить' : tab === 'reg' ? 'Создать аккаунт' : 'Войти'}</button>
       </form>
-      <p class="note">Прогресс хранится только на этом устройстве. У каждого телефона и у каждого профиля — свой. Сменить профиль или добавить ещё один можно на главной.</p>`;
-    document.getElementById('pf').onsubmit = (e) => { e.preventDefault(); addProfile(document.getElementById('pname').value); home(); };
+      <div class="spacer"></div>
+      <p class="note">Аккаунты хранятся только на этом телефоне. Пароль не сохраняется — только его хеш.</p>`;
+    app.querySelectorAll('[data-tab]').forEach((b) => { b.onclick = () => authScreen(b.dataset.tab); });
+    const form = document.getElementById('af');
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const wait = waitLeft();
+      if (wait > 0) return authScreen(tab, `Слишком много попыток. Подождите ${wait} с.`);
+      const nick = document.getElementById('nick').value.trim();
+      const pass = document.getElementById('pass').value;
+      const pass2 = tab !== 'login' ? document.getElementById('pass2').value : pass;
+      const btn = form.querySelector('button[type=submit]');
+      if (nick.length < 2) return authScreen(tab, 'Ник — от 2 символов.');
+      if (pass.length < 4) return authScreen(tab, 'Пароль — от 4 символов.');
+      if (pass !== pass2) return authScreen(tab, 'Пароли не совпадают.');
+      if (tab === 'reg' && findAcc(nick)) return authScreen(tab, 'Такой ник уже есть на этом телефоне.');
+      if (claim && findAcc(nick) && findAcc(nick).id !== profiles.current) return authScreen(tab, 'Такой ник уже есть на этом телефоне.');
+      btn.disabled = true; btn.textContent = 'Проверяю…';
+      try {
+        if (locked) {
+          try { await unlock(document.getElementById('inv').value.trim()); } catch {
+            failed(); return authScreen(tab, 'Неверный код приглашения.');
+          }
+        }
+        if (tab === 'reg') { await createAccount(nick, pass); okTry(); return home(); }
+        if (claim) {
+          const a = curAcc(); Object.assign(a, { name: nick }, await hashPass(pass)); a.admin = a.admin !== false; enter(a.id); okTry(); return home();
+        }
+        const a = findAcc(nick);
+        if (!a) { failed(); return authScreen(tab, 'Неверный ник или пароль.'); }
+        if (!a.hash) { Object.assign(a, await hashPass(pass)); enter(a.id); okTry(); return home(); } // старый аккаунт: первый вход задаёт пароль
+        const { hash } = await hashPass(pass, a.salt);
+        if (!sameHash(hash, a.hash)) { failed(); return authScreen(tab, 'Неверный ник или пароль.'); }
+        okTry(); enter(a.id); home();
+      } catch { authScreen(tab, 'Что-то пошло не так. Попробуйте ещё раз.'); }
+    };
+  }
+
+  function statsOf(id) {
+    let st = {};
+    try { st = JSON.parse(localStorage.getItem(`${OLD_KEY}:${id}`)) || {}; } catch { /* нет памяти */ }
+    const ids = Object.keys(st.cards || {});
+    const set = new Set(st.days || []);
+    const d = new Date(); d.setHours(12);
+    if (!set.has(d.toLocaleDateString('sv'))) d.setDate(d.getDate() - 1);
+    let streakN = 0;
+    while (set.has(d.toLocaleDateString('sv'))) { streakN += 1; d.setDate(d.getDate() - 1); }
+    return { phrases: ids.filter((x) => !x.startsWith('w:')).length, words: ids.filter((x) => x.startsWith('w:')).length, streak: streakN, days: set.size };
+  }
+  const dateRu = (t) => (t ? new Date(t).toLocaleDateString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
+  const backBtn = '<button class="close" id="back" aria-label="Назад"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>';
+
+  function accountScreen() {
+    const a = curAcc();
+    const st = statsOf(a.id);
+    app.className = 'screen';
+    app.innerHTML = `
+      <div class="bar">${backBtn}<div class="eyebrow">АККАУНТ</div></div>
+      <div class="pick acc-card">${person}<span><b>${esc(a.name)}</b><small>${a.admin ? 'админ · ' : ''}с ${dateRu(a.created)}</small></span></div>
+      <section class="stats">
+        <div class="stat" style="--c: var(--violet)"><b>${fmtN(st.phrases)}</b><span>фраз знакомо</span></div>
+        <div class="stat" style="--c: var(--mint)"><b>${fmtN(st.words)}</b><span>слов знакомо</span></div>
+        <div class="stat" style="--c: var(--sun)"><b>${st.streak}</b><span>дней подряд</span></div>
+      </section>
+      ${a.admin ? '<button class="secondary" id="users"><b>Все пользователи</b><span>кто заходил на этом телефоне и их прогресс</span></button>' : ''}
+      <button class="secondary-btn" id="out">Выйти из аккаунта</button>
+      <div class="spacer"></div>
+      ${a.admin ? '<button class="link" id="lock">Заблокировать телефон: снова спросить код приглашения</button>' : ''}
+      <p class="note">Прогресс хранится только на этом телефоне.</p>`;
+    document.getElementById('back').onclick = home;
+    document.getElementById('out').onclick = () => { logout(); authScreen('login'); };
+    const u = document.getElementById('users'); if (u) u.onclick = () => usersScreen();
+    const l = document.getElementById('lock'); if (l) l.onclick = () => { forgetKey(); logout(); location.reload(); };
   }
 
   let confirmDel = null;
-  function people() {
+  function usersScreen() {
+    if (!isAdmin()) return home();
     app.className = 'screen';
     app.innerHTML = `
-      <div class="bar"><button class="close" id="back" aria-label="Назад"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button><div class="eyebrow">ПРОФИЛИ</div></div>
+      <div class="bar">${backBtn}<div class="eyebrow">ПОЛЬЗОВАТЕЛИ · ${profiles.list.length}</div></div>
       <div class="plist">
         ${profiles.list.map((x) => {
-          let st = {};
-          try { st = JSON.parse(localStorage.getItem(`${OLD_KEY}:${x.id}`)) || {}; } catch { /* нет памяти */ }
-          const known = Object.keys(st.cards || {}).length;
-          const cur = x.id === profiles.current;
-          return `<div class="prow${cur ? ' cur' : ''}">
-            <button class="pick" data-id="${x.id}">${person}<span><b>${esc(x.name)}</b><small>${cur ? 'сейчас · ' : ''}знакомых ${fmtN(known)}</small></span></button>
-            ${confirmDel === x.id
-              ? `<button class="del sure" data-del="${x.id}">Удалить</button>`
-              : `<button class="del" data-ask="${x.id}" aria-label="Удалить ${esc(x.name)}">×</button>`}
+          const st = statsOf(x.id);
+          const me = x.id === profiles.current;
+          return `<div class="urow${me ? ' cur' : ''}">
+            <div class="uhead">${person}<b>${esc(x.name)}</b>${x.admin ? '<span class="tag">админ</span>' : ''}${me ? '<span class="tag me">вы</span>' : ''}${x.hash ? '' : '<span class="tag warn">без пароля</span>'}</div>
+            <div class="ustats"><span>фраз <b>${fmtN(st.phrases)}</b></span><span>слов <b>${fmtN(st.words)}</b></span><span>серия <b>${st.streak}</b></span><span>дней <b>${st.days}</b></span></div>
+            <div class="umeta">создан ${dateRu(x.created)} · заходил ${dateRu(x.last)}</div>
+            ${me ? '' : confirmDel === x.id
+              ? `<button class="del sure" data-del="${x.id}">Точно удалить ${esc(x.name)}</button>`
+              : `<button class="link left" data-ask="${x.id}">Удалить</button>`}
           </div>`;
         }).join('')}
       </div>
-      ${confirmDel ? '<p class="note">Нажмите «Удалить» ещё раз: прогресс этого профиля сотрётся.</p>' : ''}
-      <form class="profile-form" id="pf">
-        <label for="pname">Новый профиль</label>
-        <input id="pname" name="pname" maxlength="24" autocomplete="off" placeholder="Имя или ник" enterkeyhint="done">
-        <button class="secondary-btn" type="submit">Добавить и перейти</button>
-      </form>
-      <div class="spacer"></div>
-      <button class="link" id="lock">Заблокировать приложение на этом устройстве</button>
-      <p class="note">Прогресс хранится только на этом устройстве и никуда не отправляется. На другом телефоне у человека будет свой.</p>`;
-    document.getElementById('lock').onclick = () => { forgetKey(); location.reload(); };
-    document.getElementById('back').onclick = () => { confirmDel = null; home(); };
-    app.querySelectorAll('[data-id]').forEach((b) => { b.onclick = () => { confirmDel = null; switchProfile(b.dataset.id); home(); }; });
-    app.querySelectorAll('[data-ask]').forEach((b) => { b.onclick = () => { confirmDel = b.dataset.ask; people(); }; });
-    app.querySelectorAll('[data-del]').forEach((b) => {
-      b.onclick = () => { removeProfile(b.dataset.del); confirmDel = null; if (profiles.current) people(); else welcome(); };
-    });
-    document.getElementById('pf').onsubmit = (e) => { e.preventDefault(); confirmDel = null; addProfile(document.getElementById('pname').value); home(); };
+      <p class="note">Видно аккаунты этого телефона. Пароли не видны никому — хранится только их хеш.</p>`;
+    document.getElementById('back').onclick = () => { confirmDel = null; accountScreen(); };
+    app.querySelectorAll('[data-ask]').forEach((b) => { b.onclick = () => { confirmDel = b.dataset.ask; usersScreen(); }; });
+    app.querySelectorAll('[data-del]').forEach((b) => { b.onclick = () => { removeAccount(b.dataset.del); confirmDel = null; usersScreen(); }; });
   }
 
   function begin() {
@@ -346,13 +469,29 @@
     if (!c) return finish();
     const understand = c.side === 'understand';
     const pct = (session.done / session.total) * 100;
-    const front = understand
+    const word = c.kind === 'word';
+    const front = word && understand
+      ? `<div class="word">${esc(c.expr)}</div><div class="ipa">/${esc(c.ipa)}/</div>
+         <div class="hint">Как переводится? Сначала скажите вслух.</div>
+         <button class="speak" id="say">${speakIcon}Послушать</button>`
+      : word
+        ? `<div class="sentence">${esc(c.tr)}</div>
+         <div class="hint">Как это по-английски? Подсказка: <b>${esc(c.hint)}</b></div>`
+        : understand
       ? `<div class="sentence">${c.en}</div>
          <div class="hint">Что значит выделенное? Сначала скажите вслух.</div>
          <button class="speak" id="say">${speakIcon}Послушать</button>`
       : `<div class="sentence">${esc(c.ru)}</div>
          <div class="hint">Скажите по-английски вслух. Подсказка: <b>${esc(c.hint)}</b></div>`;
-    const back = understand
+    const back = word && understand
+      ? `<div class="answer"><div class="expr tr-big">${esc(c.tr)}</div>
+           <div class="ex"><small>ПРИМЕР</small>${esc(c.ex)}</div>
+           <button class="speak" id="say3">${speakIcon}Послушать пример</button></div>`
+      : word
+        ? `<div class="answer"><div class="word">${esc(c.expr)}</div><div class="ipa">/${esc(c.ipa)}/</div>
+           <button class="speak" id="say2">${speakIcon}Послушать</button>
+           <div class="ex"><small>ПРИМЕР</small>${esc(c.ex)}</div></div>`
+        : understand
       ? `<div class="answer"><div class="expr">${esc(c.expr)}</div><div>${c.meaning}</div><div class="tr">${esc(c.tr)}</div>
            <div class="ex"><small>ЕЩЁ ПРИМЕР</small>${esc(c.ex)}</div></div>`
       : `<div class="answer"><div class="sentence">${c.en}</div><div class="expr">${esc(c.expr)}</div>
@@ -386,6 +525,8 @@
     document.getElementById('close').onclick = home;
     const say = document.getElementById('say') || document.getElementById('say2');
     if (say) say.onclick = () => speak(plain(c.en), say);
+    const say3 = document.getElementById('say3');
+    if (say3) say3.onclick = () => speak(c.ex, say3);
     if (!session.shown) {
       document.getElementById('reveal').onclick = () => {
         session.shown = true;
@@ -416,7 +557,7 @@
   }
 
   function grade(c, g) {
-    if (!state.cards[c.id]) state.newCount += 1;
+    if (!state.cards[c.id]) state[`newCount${W()}`] = (state[`newCount${W()}`] || 0) + 1;
     session.queue.shift();
     session.shown = false;
     if (g === 'again') {
@@ -495,7 +636,16 @@
     return JSON.parse(text);
   }
 
-  function start(data) {
+  function start(data, words, silent) { // silent — данные открыты при входе, экран рисует форма
+    // режим «Слова»: каждое слово — две карточки, «понять» (EN→RU) и «сказать» (RU→EN)
+    allWords = [];
+    if (words) {
+      for (const side of ['understand', 'say']) {
+        for (const [w, pos, ipa, level, tr, ex, hint] of words.items) {
+          allWords.push({ id: `w:${w}:${side}`, kind: 'word', side, expr: w, en: w, level, ipa, tr, ex, hint, topic: pos });
+        }
+      }
+    }
     // в файле каждое выражение один раз — здесь из него получаются две карточки
     all = [];
     for (const side of ['understand', 'say']) {
@@ -507,60 +657,15 @@
     state = load();
     Object.values(data.topics).forEach((t, i) => { topicIndex[t] = i; });
     applyLevels();
-    if (profiles.current) home(); else welcome();
+    if (silent) return;
+    const a = curAcc();
+    if (a && a.hash) { touch(); home(); } else if (a) authScreen('claim'); else authScreen(profiles.list.length ? 'login' : 'reg');
   }
 
-  function pinScreen(buf) {
-    let code = '';
-    let busy = false;
-    const pad = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
-    const lockUntil = () => { try { return +localStorage.getItem('levelup-wait') || 0; } catch { return 0; } };
-    const fails = () => { try { return +localStorage.getItem('levelup-fails') || 0; } catch { return 0; } };
-    const setFails = (n) => { try { localStorage.setItem('levelup-fails', n); if (n >= 5) localStorage.setItem('levelup-wait', Date.now() + 30000); } catch { /* нет памяти */ } };
-    // экран рисуется один раз; дальше меняются только точки, подпись и доступность клавиш
-    app.className = 'screen pin-screen';
-    app.innerHTML = `
-      <div class="pin-head">
-        <img class="pin-icon" src="icons/icon-192.png" alt="">
-        <div class="eyebrow">LEVEL UP · АНГЛИЙСКИЙ</div>
-        <h1 class="title">Введите код</h1>
-      </div>
-      <div class="dots">${[0, 1, 2, 3].map(() => '<i></i>').join('')}</div>
-      <p class="note pin-msg" role="status"></p>
-      <div class="keypad">${pad.map((k) => (k ? `<button class="key" data-k="${k}" aria-label="${k === '⌫' ? 'Стереть' : k}">${k}</button>` : '<span></span>')).join('')}</div>`;
-    const dots = app.querySelector('.dots');
-    const msgEl = app.querySelector('.pin-msg');
-    app.querySelectorAll('[data-k]').forEach((b) => { b.onclick = () => press(b.dataset.k); });
-    function draw(msg, cls) {
-      const wait = Math.ceil((lockUntil() - Date.now()) / 1000);
-      dots.querySelectorAll('i').forEach((d, i) => d.classList.toggle('on', i < code.length));
-      dots.setAttribute('aria-label', `Введено ${code.length} из 4`);
-      if (cls) { dots.classList.remove(cls); void dots.offsetWidth; dots.classList.add(cls); }
-      msgEl.textContent = wait > 0 ? `Слишком много попыток. Подождите ${wait} с.` : msg || 'Код спросят один раз на этом устройстве.';
-      app.querySelectorAll('[data-k]').forEach((b) => { b.disabled = wait > 0 || busy; });
-      if (wait > 0) setTimeout(() => draw(), 1000);
-    }
-    async function press(k) {
-      if (busy) return;
-      dots.classList.remove('shake');
-      if (k === '⌫') { code = code.slice(0, -1); return draw(); }
-      if (code.length >= 4) return;
-      code += k;
-      if (code.length < 4) return draw();
-      busy = true; draw('Проверяю…');
-      try {
-        const key = await deriveKey(code, new Uint8Array(buf).slice(3, 19));
-        const data = await decrypt(buf, key);
-        try { localStorage.setItem(KEY_STORE, b64(new Uint8Array(await crypto.subtle.exportKey('raw', key)))); localStorage.removeItem('levelup-fails'); } catch { /* нет памяти */ }
-        app.querySelector('.dots').classList.add('ok');
-        setTimeout(() => start(data), reduced ? 0 : 380);
-      } catch {
-        busy = false; code = ''; setFails(fails() + 1);
-        draw('Неверный код', 'shake');
-        if (navigator.vibrate) navigator.vibrate(120);
-      }
-    }
-    draw();
+  async function openAll(buf, wbuf, key) {
+    const data = await decrypt(buf, key);
+    const words = wbuf ? await decrypt(wbuf, key) : null;
+    return [data, words];
   }
 
   async function boot() {
@@ -570,15 +675,21 @@
       app.innerHTML = '<p class="note">Не удалось загрузить карточки. Откройте приложение один раз с интернетом.</p>';
       return;
     }
+    let wbuf = null;
+    try { const r = await fetch('words.enc'); if (r.ok) wbuf = await r.arrayBuffer(); } catch { /* слов нет — работает только режим «Фразы» */ }
     let saved = null;
     try { saved = localStorage.getItem(KEY_STORE); } catch { /* нет памяти */ }
     if (saved) {
       try {
         const key = await crypto.subtle.importKey('raw', unb64(saved), 'AES-GCM', false, ['decrypt']);
-        return start(await decrypt(buf, key));
+        const [data, words] = await openAll(buf, wbuf, key);
+        return start(data, words);
       } catch { forgetKey(); }
     }
-    pinScreen(buf);
+    locked = { buf, wbuf };
+    profiles = loadProfiles();
+    const cur = profiles.list.find((x) => x.id === profiles.current);
+    authScreen(cur && !cur.hash ? 'claim' : profiles.list.length ? 'login' : 'reg');
   }
   boot();
 
