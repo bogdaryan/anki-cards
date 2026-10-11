@@ -54,7 +54,7 @@
     app.innerHTML = `
       <header>
         <div class="eyebrow">LEVEL UP · АНГЛИЙСКИЙ</div>
-        <h1 class="title">Карточки для стрима</h1>
+        <h1 class="title">Карточки</h1>
         <div class="deck">B1–B2, набор 1 · ${total / 2} выражений, ${total} карточек</div>
       </header>
       <section class="stats" aria-label="Сегодня">
