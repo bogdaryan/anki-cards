@@ -143,47 +143,10 @@ button:focus-visible { outline: 3px solid var(--sun); outline-offset: 2px; }
 .ipa { color: var(--muted); font-size: 15px; margin-top: -4px; }
 .tr-big { font-family: var(--body); font-weight: 700; font-size: 20px; color: var(--fg); }
 
-/* ——— настройки и профили ——— */
+/* ——— настройки ——— */
 .settings { display: grid; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; }
 .seg.wide { min-width: 70px; padding-inline: 8px; }
 .seg.on.c { background: var(--pink); border-color: var(--pink); }
-button.pill { font: inherit; font-size: 12px; cursor: pointer; }
-.pill.who { margin-left: auto; max-width: 46%; }
-.pill.who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.profile-form { display: grid; gap: 8px; }
-.profile-form label { font-size: 13px; color: var(--muted); }
-.profile-form input {
-  font: inherit; font-size: 16px; color: var(--fg); background: var(--panel);
-  border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; -webkit-user-select: text; user-select: text;
-}
-.profile-form input:focus { outline: 2px solid var(--violet); outline-offset: 1px; }
-.secondary-btn { border: 1px solid var(--violet); color: var(--violet); background: transparent; border-radius: var(--r); padding: 12px; font-weight: 700; }
-.plist { display: grid; gap: 8px; }
-.prow { display: flex; gap: 8px; align-items: stretch; }
-.pick { flex: 1; min-width: 0; display: flex; gap: 10px; align-items: center; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; }
-.prow.cur .pick { border-color: var(--violet); box-shadow: 0 0 0 1px var(--violet) inset; }
-.pick svg { width: 20px; height: 20px; color: var(--violet); flex: none; }
-.pick span { display: grid; min-width: 0; }
-.pick b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pick small { color: var(--muted); font-size: 11.5px; }
-.del { width: 44px; border-radius: var(--r); border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 18px; }
-.del.sure { width: auto; padding: 0 12px; background: var(--coral); color: var(--on-accent); border: 0; font-size: 13px; font-weight: 700; }
-
-/* ——— вход и аккаунты ——— */
-.note.center { text-align: center; }
-.acc-card { flex: none; }
-.urow { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; display: grid; gap: 6px; }
-.urow.cur { border-color: var(--violet); }
-.uhead { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.uhead svg { width: 18px; height: 18px; color: var(--violet); flex: none; }
-.uhead b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tag { font-size: 10.5px; padding: 2px 8px; border-radius: 99px; background: var(--line); color: var(--muted); flex: none; }
-.tag.me { background: var(--violet); color: var(--on-accent); }
-.tag.warn { background: var(--sun); color: #1B1B3A; }
-.ustats { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--muted); }
-.ustats b { color: var(--fg); font-variant-numeric: tabular-nums; }
-.umeta { font-size: 11.5px; color: var(--muted); }
-.link.left { align-self: flex-start; justify-self: start; color: var(--coral); }
 
 /* ——— сессия ——— */
 .bar { display: flex; align-items: center; gap: 10px; }
